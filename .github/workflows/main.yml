@@ -1,0 +1,75 @@
+name: Build SAYYAR APK
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: |
+          flutter create --platforms=android --org com.sayyar --project-name sayyar /tmp/sayyar_android
+          cp -R /tmp/sayyar_android/android ./android
+
+      - name: Configure AndroidManifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text(encoding="utf-8")
+          m = re.search(r"<manifest[^>]*>", s)
+          extra = """
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.TTS_SERVICE"/>
+                  </intent>
+              </queries>
+          """
+          if "ACCESS_FINE_LOCATION" not in s:
+              s = s[:m.end()] + extra + s[m.end():]
+          s = re.sub(r'android:label="[^"]*"', 'android:label="سيّار"', s, count=1)
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+      - run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+      - run: flutter build apk --release
+      - run: cp build/app/outputs/flutter-apk/app-release.apk Sayyar.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SAYYAR-APK
+          path: Sayyar.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: SAYYAR build ${{ github.run_number }}
+          files: Sayyar.apk
+          make_latest: true
